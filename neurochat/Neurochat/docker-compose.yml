@@ -1,0 +1,41 @@
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: always
+
+  pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: pipelines
+    ports:
+      - "9099:9099"
+    environment:
+      - PIPELINES_API_KEY=test1234
+    volumes:
+      - ./Neurochat:/app/pipelines
+    restart: always
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_API_BASE_URL=http://pipelines:9099
+      - OPENAI_API_KEY=test1234
+    volumes:
+      - open-webui:/app/backend/data
+    depends_on:
+      - ollama
+      - pipelines
+    restart: always
+
+volumes:
+  ollama:
+  pipelines:
+  open-webui:
