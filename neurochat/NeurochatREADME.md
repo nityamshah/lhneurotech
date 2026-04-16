@@ -1,4 +1,4 @@
-#A real time neuroadaptive system that adjusts LLM responses using EEG-derived engagement scores.
+A real time neuroadaptive system that adjusts LLM responses using EEG-derived engagement scores.
 
 Overview:
 - Processes EEG signals in real time
