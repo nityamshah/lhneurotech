@@ -15,11 +15,13 @@ Read this file fully before writing any code.
 
 ## Reference material (read these, don't guess)
 
-- `docs/neurochat-paper.pdf` — the paper. Ground truth for band ranges, calibration, freeze behavior.
+- `docs/neurochat_paper.pdf` — the paper. Ground truth for band ranges, calibration, freeze behavior.
 - `docs/TARGET_README.md` — the README of the finished project. It describes the end state:
   file tree, test suite, run commands, env vars. Build toward it.
 - `docs/reference_dsp.py` — a paper-faithful DSP implementation (FFT per epoch). Use it for
-  band definitions and calibration ideas. The production DSP below uses Welch, not this FFT approach.
+  band definitions and calibration ideas. The production DSP below now follows the paper's
+  epoch + FFT method too (changed from Welch at the user's request); the differences from the
+  reference are noted in the DSP steps below.
 
 If anything here conflicts with `docs/TARGET_README.md`, tell me and ask which wins. Don't silently pick one.
 
@@ -131,10 +133,17 @@ class EngagementModality(ABC):
 - Every 1 second, compute engagement over the last 15 seconds:
   1. Bandpass 1–30 Hz (scipy Butterworth, order 4, `sosfiltfilt` or `filtfilt`)
   2. 60 Hz notch
-  3. Welch PSD per channel
-  4. Band power: theta 4–7 Hz, alpha 7–11 Hz, beta 11–20 Hz
-  5. Engagement index = beta / (alpha + theta + 1e-9)
-  6. Average over the frontal channels only
+  3. Segment into 1-second epochs with a 250 ms step (step rounded to whole samples)
+  4. FFT per epoch (Hann window, one-sided PSD), per channel
+  5. Band power per epoch, integrated over the band (trapezoid): theta 4–7 Hz, alpha 7–11 Hz,
+     beta 11–20 Hz
+  6. Engagement index per epoch = beta / (alpha + theta + 1e-9)
+  7. Score = mean of the per-epoch index over all epochs in the window and over the frontal
+     channels only
+- Calibration scores use the paper's shorter 10-second window: the modality also returns
+  `ModalityOutput.calibration_score` (same method, last 10 s) and the fuser records that during
+  calibration. The live score and normalization still use the 15 s window.
+- An empty poll from the board means the stream broke: drop the cached score and clear the buffer.
 - `confidence` = fraction of samples in the window with |amplitude| < 100 µV.
 - `get_output()` returns `None` if the buffer holds less than 15 s, and also if the board failed to start.
 - If the board can't connect, log a warning and return `None`. Never crash the server.
@@ -378,3 +387,64 @@ in the README for other users.
 - Webcam/MediaPipe modality
 - Neural-net fusion (KernelFusion) or a FusionStrategy ABC
 - Separate `dsp.py`, Docker, OpenWebUI, cloud LLM backends, session analytics
+
+---
+
+## Implementation status (as built)
+
+All three slices are built and committed locally (nothing pushed unless the user says so). Verified:
+backend `uv run pytest tests/ -v` → 75 passed (+5 `llm` tests deselected by default); frontend
+`npm test` → 86 passed; and an end-to-end run in Edge against the real backend (synthetic board), the
+Vite dev server and a real `qwen3.5:9b` through Ollama. The sections above are the spec; this section
+records where the build clarifies or departs from it.
+
+**Tooling**
+- `uv init` in uv 0.13 defaults to a `src/` package layout with `requires-python = ">=3.15"`, which breaks
+  `uv python pin 3.13`. `backend/pyproject.toml` is hand-written (flat scripts, no build system,
+  `requires-python = ">=3.11"`, `.python-version` = 3.13). Don't regenerate it with `uv init`.
+- pytest config lives in `pyproject.toml`: `asyncio_mode = "auto"`, `pythonpath = ["."]`, and
+  `addopts = "-m 'not llm'"`. Run the Ollama test with `uv run pytest -m llm -rs` (it reads the prompt from
+  `frontend/src/lib/systemPrompt.js` and skips with a reason if Ollama is unreachable; its assertions are
+  heuristic and can be flaky).
+- Frontend dependencies beyond the spec's list (approved): `react-markdown`, `@vitejs/plugin-react`,
+  `@testing-library/jest-dom`, `@testing-library/user-event`. Test tooling needs Node `^22.22 || ^24.15 || >=26`.
+- Test files: backend `test_calibration` 25, `test_dsp` 19, `test_eeg_modality` 13, `test_fusion` 12,
+  `test_websocket` 6, `test_llm_adaptation` 5; frontend `App` 4, `BrainWidget` 11, `CalibrationModal` 12,
+  `ChatInterface` 15, `ollama` 7, `systemPrompt` 10, `useCalibration` 15, `useEngagementStream` 12. These
+  differ from the counts in `docs/TARGET_README.md`, which are targets only.
+
+**Backend behaviour the spec left open**
+- DSP follows the paper (epoch + FFT, see the DSP steps above). Band power is the trapezoid-integrated
+  one-sided PSD; the engagement index is computed per epoch, then averaged (paper eq. 2). The step is
+  rounded to whole samples (62 at 250 Hz). Confidence is measured on the bandpassed frontal channels.
+- Calibration: after phase 1 ends (stop or the 120 s timeout) the state returns to `idle` with `e_min` set and
+  `e_max` unset; `start(1)` resets all bounds; `start(2)` during phase 1 finalizes phase 1 first; phase 2
+  ends in `complete` only if every modality has both bounds, else `idle`. `normalize()` returns `None`
+  unless the state is `complete`. The timeout is checked lazily (injectable clock) on `state` and `record()`.
+  Phase 1 keeps the lowest score as `e_min` and phase 2 the highest as `e_max` (per phase, not across both).
+- Fuser payload: `sources[name].score` is the normalized score (null before calibration); top-level
+  `confidence` is the weight-averaged confidence over modalities that produced an output (so it is available
+  during calibration); `calibration.e_min`/`e_max` are the first modality's bounds. A poll with no new
+  samples drops the cached score and clears the buffer.
+- Adding a modality: implement `EngagementModality`, add it to `ACTIVE_MODALITIES` in `config.py` and to
+  `build_modality` in `main.py`. Calibration only completes if every modality scores in both phases.
+
+**Frontend behaviour the spec left open**
+- `useEngagementStream` also returns `send` (used by `useCalibration`). `freeze()` re-captures the live score on
+  every focus; `fused` is `null` whenever the backend is disconnected, so the tag is `unavailable`.
+- `ChatInterface` takes `score`, `connected`, `calibrated`, `onInputFocus`, `onMessageSent`; `onMessageSent`
+  (unfreeze) runs after the stream ends, including after an error.
+- `useCalibration` advances to phase 2 once per session, triggered by either its own 120 s countdown or the
+  backend reporting phase 1 over (only after phase 1 was actually observed), and sends `stop_calibration` once
+  at the end of phase 2. Losing the connection abandons the session. The modal's optional debug mode was not
+  built. `BrainWidget` shows the live (or frozen) score, unlike the paper, which hid it from participants.
+
+**Known limits**
+- The BrainFlow synthetic board produces pure single-frequency sines (no beta), so its score is nearly
+  constant and meaningless; real variation needs real hardware.
+- The WebSocket binds `0.0.0.0` (per the spec's startup line) with no Origin check, so any web page or LAN
+  device can read the stream and send calibration commands.
+- Calibration records low-confidence windows too, so one artifact can set a bound.
+- The backend emits nothing for the first 15 s. Calibration lives in backend memory, so a backend restart
+  resets it. Chat history is in memory only. A page reload mid-calibration restarts the countdown display.
+- Differences from the paper are listed in `NeurochatREADME.md`.
