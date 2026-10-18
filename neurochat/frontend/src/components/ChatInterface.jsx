@@ -11,7 +11,7 @@ function formatTag(score) {
 
 const styles = {
   root: { display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: 800, margin: '0 auto', fontFamily: 'system-ui, sans-serif' },
-  log: { flex: 1, overflowY: 'auto', padding: 16 },
+  log: { flex: 1, overflowY: 'auto', padding: '96px 16px 16px' }, // top room for the fixed BrainWidget
   user: { background: '#e8f0fe', borderRadius: 8, padding: '8px 12px', margin: '8px 0 8px auto', maxWidth: '80%', width: 'fit-content', whiteSpace: 'pre-wrap' },
   assistant: { background: '#f4f4f5', borderRadius: 8, padding: '8px 12px', margin: '8px 0', maxWidth: '80%', width: 'fit-content' },
   error: { background: '#fdecea', color: '#b3261e', padding: '8px 16px' },
@@ -19,7 +19,14 @@ const styles = {
   input: { flex: 1, padding: 8, fontSize: 16 },
 }
 
-export default function ChatInterface({ score }) {
+export default function ChatInterface({
+  score,
+  connected = false,
+  calibrated = true,
+  onInputFocus,
+  onMessageSent,
+}) {
+  const locked = connected && !calibrated
   // What the user sees (untagged) vs. what the API sees (tagged).
   const [messages, setMessages] = useState([])
   const apiMessages = useRef([])
@@ -35,7 +42,7 @@ export default function ChatInterface({ score }) {
   async function handleSubmit(e) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text || streaming || locked) return
 
     const taggedUser = { role: 'user', content: `${formatTag(score)}\n${text}` }
     const history = apiMessages.current
@@ -61,6 +68,7 @@ export default function ChatInterface({ score }) {
       if (!reply) setMessages((m) => m.slice(0, -1))
     } finally {
       setStreaming(false)
+      onMessageSent?.()
     }
   }
 
@@ -83,10 +91,11 @@ export default function ChatInterface({ score }) {
           aria-label="Message"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          disabled={streaming}
-          placeholder="Ask anything..."
+          onFocus={() => onInputFocus?.()}
+          disabled={streaming || locked}
+          placeholder={locked ? 'Complete calibration to begin.' : 'Ask anything...'}
         />
-        <button type="submit" disabled={streaming || !input.trim()}>Send</button>
+        <button type="submit" disabled={streaming || locked || !input.trim()}>Send</button>
       </form>
     </div>
   )

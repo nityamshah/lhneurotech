@@ -126,3 +126,68 @@ describe('ChatInterface', () => {
     expect(sentMessages(1).map((m) => m.content)).toEqual([SYSTEM_PROMPT, '[Engagement: 0.50]\ntwo'])
   })
 })
+
+describe('ChatInterface backend states and freeze hooks', () => {
+  it('disables the input when connected but not calibrated', () => {
+    render(<ChatInterface score={null} connected calibrated={false} />)
+    const input = screen.getByPlaceholderText('Complete calibration to begin.')
+    expect(input).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+  })
+
+  it('works with an unavailable tag when the backend is not connected', async () => {
+    fetchMock.mockImplementation(reply('ok'))
+    const user = userEvent.setup()
+    render(<ChatInterface score={null} connected={false} calibrated={false} />)
+    expect(screen.getByLabelText('Message')).not.toBeDisabled()
+    await send(user, 'hi')
+    await screen.findByText('ok')
+    expect(sentMessages()[1].content).toBe('[Engagement: unavailable]\nhi')
+  })
+
+  it('is enabled and tags with the score when connected and calibrated', async () => {
+    fetchMock.mockImplementation(reply('ok'))
+    const user = userEvent.setup()
+    render(<ChatInterface score={0.8} connected calibrated />)
+    expect(screen.getByPlaceholderText('Ask anything...')).not.toBeDisabled()
+    await send(user, 'hi')
+    await screen.findByText('ok')
+    expect(sentMessages()[1].content).toBe('[Engagement: 0.80]\nhi')
+  })
+
+  it('calls onInputFocus when the input is focused', async () => {
+    const onInputFocus = vi.fn()
+    const user = userEvent.setup()
+    render(<ChatInterface score={0.5} connected calibrated onInputFocus={onInputFocus} />)
+    expect(onInputFocus).not.toHaveBeenCalled()
+    await user.click(screen.getByLabelText('Message'))
+    expect(onInputFocus).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls onMessageSent only after the response has finished streaming', async () => {
+    let controller
+    const body = new ReadableStream({ start: (c) => (controller = c) })
+    fetchMock.mockResolvedValue(new Response(body, { status: 200 }))
+    const onMessageSent = vi.fn()
+    const user = userEvent.setup()
+    render(<ChatInterface score={0.5} connected calibrated onMessageSent={onMessageSent} />)
+    await send(user, 'hi')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(onMessageSent).not.toHaveBeenCalled()
+
+    controller.enqueue(new TextEncoder().encode(ndjson('done')))
+    controller.close()
+    await screen.findByText('done')
+    await waitFor(() => expect(onMessageSent).toHaveBeenCalledTimes(1))
+  })
+
+  it('calls onMessageSent after a failed request too, so the score is never left frozen', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const onMessageSent = vi.fn()
+    const user = userEvent.setup()
+    render(<ChatInterface score={0.5} connected calibrated onMessageSent={onMessageSent} />)
+    await send(user, 'hi')
+    await screen.findByRole('alert')
+    expect(onMessageSent).toHaveBeenCalledTimes(1)
+  })
+})
