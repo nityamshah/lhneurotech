@@ -10,7 +10,7 @@ By default it runs on BrainFlow's **synthetic board**, so you can run everything
 
 ## How it works
 
-1. **EEG source.** An OpenBCI Cyton or Ganglion (or the synthetic board) streams raw EEG through BrainFlow.
+1. **EEG source.** An OpenBCI Cyton or Ganglion or other headset (or the synthetic board) streams raw EEG through BrainFlow.
 2. **Python backend.** Every second it filters the last 15 s, cuts it into 1 s epochs (250 ms step), takes an FFT per epoch, computes the engagement index per epoch, and averages it. It normalizes the result with the user's own calibration range and broadcasts it over WebSocket (`ws://localhost:8765`).
 3. **React frontend.** It freezes the score when the input is focused and sends `[Engagement: 0.72]\n<your text>` to Ollama. Only your text is shown in the chat.
 4. **Ollama (`qwen3.5:9b`, local).** A fixed system prompt maps the score to a teaching style:
