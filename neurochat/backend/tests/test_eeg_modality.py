@@ -89,6 +89,36 @@ def test_a_poll_with_no_new_samples_drops_the_cached_score():
     assert modality.get_output() is None
 
 
+def test_calibration_score_uses_the_shorter_ten_second_window():
+    # 5 s of beta-heavy signal followed by 10 s of relaxed signal.
+    mixed = np.concatenate(
+        [eeg_mix(5, theta=2, alpha=2, beta=10), eeg_mix(10, theta=10, alpha=10, beta=2)], axis=1
+    )
+    modality, relaxed_only = make(), make()
+    modality.ingest(mixed)
+    relaxed_only.ingest(eeg_mix(15, theta=10, alpha=10, beta=2))
+    out = modality.get_output()
+    assert out.calibration_score < out.score  # the 15 s score still includes the beta-heavy start
+    assert out.calibration_score == pytest.approx(relaxed_only.get_output().score, rel=0.25)
+
+
+def test_score_and_calibration_score_agree_on_a_stationary_signal():
+    modality = make()
+    modality.ingest(eeg_mix(15, theta=3, alpha=3, beta=6))
+    out = modality.get_output()
+    assert out.calibration_score == pytest.approx(out.score, rel=0.05)
+
+
+def test_a_gap_in_the_stream_clears_the_buffer_so_epochs_never_span_it():
+    modality = make()
+    modality.ingest(eeg_mix(16, beta=5))
+    modality.ingest(np.empty((2, 0)))
+    assert modality.get_output() is None
+    modality.ingest(eeg_mix(5, beta=5))
+    assert modality._buffer.shape[1] == 5 * FS
+    assert modality.get_output() is None  # a full 15 s window must be rebuilt
+
+
 def test_frontal_indices_beyond_the_channel_count_are_dropped():
     modality = make(frontal_channel_indices=[0, 1, 99])
     modality.ingest(eeg_mix(16, beta=5))

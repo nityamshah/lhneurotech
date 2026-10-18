@@ -19,7 +19,8 @@ class EngagementFuser:
             if output is None:
                 continue
             weight = self.weights.get(name, 0.0)
-            self.calibration.record(name, output.score)
+            calibration_score = output.score if output.calibration_score is None else output.calibration_score
+            self.calibration.record(name, calibration_score)
             normalized = self.calibration.normalize(output.score, name)
             sources[name] = {"score": normalized, "confidence": output.confidence}
 

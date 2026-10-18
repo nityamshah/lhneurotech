@@ -113,6 +113,25 @@ def test_each_tick_feeds_raw_scores_to_calibration_while_a_phase_is_active():
     assert cal.e_min["eeg"] == 1.5
 
 
+def test_calibration_records_the_calibration_score_but_normalizes_the_live_score():
+    eeg = StubModality("eeg")
+    cal = Calibration(["eeg"])
+    f = fuser_for([eeg], {"eeg": 1.0}, cal)
+
+    cal.start(1)
+    eeg.output = ModalityOutput(score=99.0, confidence=1.0, calibration_score=0.0)
+    f.get_engagement()
+    cal.stop()
+    cal.start(2)
+    eeg.output = ModalityOutput(score=99.0, confidence=1.0, calibration_score=10.0)
+    f.get_engagement()
+    cal.stop()
+    assert (cal.e_min["eeg"], cal.e_max["eeg"]) == (0.0, 10.0)  # not the live score, 99
+
+    eeg.output = ModalityOutput(score=5.0, confidence=1.0, calibration_score=123.0)
+    assert f.get_engagement()["fused"] == pytest.approx(0.5)  # live score normalized
+
+
 def test_payload_shape_and_json_serializable():
     eeg = StubModality("eeg", score=5.0)
     payload = fuser_for([eeg], {"eeg": 1.0}, calibrated(["eeg"], lo=0.0, hi=10.0)).get_engagement()
