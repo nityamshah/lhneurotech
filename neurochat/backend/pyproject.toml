@@ -1,0 +1,24 @@
+[project]
+name = "neurochat-backend"
+version = "0.1.0"
+description = "NeuroChat backend: EEG engagement score over WebSocket"
+requires-python = ">=3.11"
+dependencies = [
+    "brainflow>=5.23.0",
+    "numpy>=2.4.6",
+    "scipy>=1.17.1",
+    "websockets>=17.2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["llm: needs a running Ollama (deselected by default)"]
+addopts = "-m 'not llm'"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
